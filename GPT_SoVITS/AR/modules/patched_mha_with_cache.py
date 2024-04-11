@@ -7,9 +7,33 @@ from torch.nn.functional import (
 )
 from torch.nn import functional as F
 import torch
+import math
 # Tensor = torch.Tensor
 # from typing import Callable, List, Optional, Tuple, Union
 
+# Efficient implementation equivalent to the following:
+# should use this if ipex in future support
+# def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False, scale=None) -> torch.Tensor:
+#     attn_mask=attn_mask.squeeze(0)[0]
+#     L, S = query.size(-2), key.size(-2)
+#     scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+#     attn_bias = torch.zeros(L, S, dtype=query.dtype)
+#     if is_causal:
+#         assert attn_mask is None
+#         temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+#         attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+#         attn_bias.to(query.dtype)
+
+#     if attn_mask is not None:
+#         if attn_mask.dtype == torch.bool:
+#             attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+#         else:
+#             attn_bias += attn_mask
+#     attn_weight = query @ key.transpose(-2, -1) * scale_factor
+#     attn_weight += attn_bias
+#     attn_weight = torch.softmax(attn_weight, dim=-1)
+#     attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+#     return attn_weight @ value
 
 def multi_head_attention_forward_patched(
     query: Tensor,
@@ -449,9 +473,7 @@ def multi_head_attention_forward_patched(
         v = v.view(bsz, num_heads, src_len, head_dim)
 
         # with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True):
-        attn_output = scaled_dot_product_attention(
-            q, k, v, attn_mask, dropout_p, is_causal
-        )
+        attn_output = scaled_dot_product_attention(q, k, v, attn_mask, dropout_p, is_causal)
 
         attn_output = (
             attn_output.permute(2, 0, 1, 3).contiguous().view(bsz * tgt_len, embed_dim)

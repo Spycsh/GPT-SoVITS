@@ -441,17 +441,24 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language)
         bert = bert.to(device).unsqueeze(0)
         all_phoneme_len = torch.tensor([all_phoneme_ids.shape[-1]]).to(device)
         prompt = prompt_semantic.unsqueeze(0).to(device)
+        # import intel_extension_for_pytorch as ipex
+        # ipex.optimize(t2s_model.model)
+        # from torch import profiler
         t2 = ttime()
         with torch.no_grad():
-            # pred_semantic = t2s_model.model.infer(
-            pred_semantic, idx = t2s_model.model.infer_panel(
-                all_phoneme_ids,
-                all_phoneme_len,
-                prompt,
-                bert,
-                # prompt_phone_len=ph_offset,
-                top_k=config['inference']['top_k'],
-                early_stop_num=hz * max_sec)
+        #     # pred_semantic = t2s_model.model.infer(
+            # with profiler.profile(record_shapes=True) as prof:
+            #     with profiler.record_function("model_inference"):
+            with torch.cpu.amp.autocast(enabled=True, dtype=torch.bfloat16, cache_enabled=True):
+                pred_semantic, idx = t2s_model.model.infer_panel(
+                    all_phoneme_ids,
+                    all_phoneme_len,
+                    prompt,
+                    bert,
+                    # prompt_phone_len=ph_offset,
+                    top_k=config['inference']['top_k'],
+                    early_stop_num=hz * max_sec)
+            # print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
         t3 = ttime()
         # print(pred_semantic.shape,idx)
         pred_semantic = pred_semantic[:, -idx:].unsqueeze(0)  # .unsqueeze(0)#mq要多unsqueeze一次
@@ -469,7 +476,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language)
         audio_opt.append(zero_wav)
         t4 = ttime()
         audio_bytes = pack_audio(audio_bytes,(np.concatenate(audio_opt, 0) * 32768).astype(np.int16),hps.data.sampling_rate)
-    # logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
         if stream_mode == "normal":
             audio_bytes, audio_chunk = read_clean_buffer(audio_bytes)
             yield audio_chunk
