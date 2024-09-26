@@ -123,8 +123,7 @@ class T2SBlock:
         else:
             return x * padding_mask
         
-    def process_prompt(self, x:torch.Tensor, attn_mask : torch.Tensor, padding_mask:Optional[torch.Tensor]=None, torch_sdpa:bool=True):
-
+    def process_prompt(self, x:torch.Tensor, attn_mask : torch.Tensor, padding_mask:Optional[torch.Tensor]=None, torch_sdpa:bool=True, token_idx:torch.Tensor=None):
             
         q, k, v = F.linear(self.to_mask(x, padding_mask), self.qkv_w, self.qkv_b).chunk(3, dim=-1)
 
@@ -142,6 +141,7 @@ class T2SBlock:
 
         if torch_sdpa:
             attn = F.scaled_dot_product_attention(q, k, v, ~attn_mask)
+            attn = attn.nan_to_num(nan=0.0) # convert the nan to zeros explicitly
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
 
@@ -186,11 +186,15 @@ class T2SBlock:
             )
         return x, k_cache, v_cache
     
-    def decode_next_token(self, x:torch.Tensor, k_cache:torch.Tensor, v_cache:torch.Tensor, attn_mask:Optional[torch.Tensor]=None, torch_sdpa:bool=True):
+    def decode_next_token(self, x:torch.Tensor, k_cache:torch.Tensor, v_cache:torch.Tensor, attn_mask:Optional[torch.Tensor]=None, torch_sdpa:bool=True, token_idx:torch.Tensor=None):
         q, k, v = F.linear(x, self.qkv_w, self.qkv_b).chunk(3, dim=-1)
 
-        k_cache = torch.cat([k_cache, k], dim=1)
-        v_cache = torch.cat([v_cache, v], dim=1)
+        if token_idx:
+            k_cache.index_copy_(1, token_idx-1, k)
+            v_cache.index_copy_(1, token_idx-1, v)
+        else:
+            k_cache = torch.cat([k_cache, k], dim=1)
+            v_cache = torch.cat([v_cache, v], dim=1)
         
         batch_size = q.shape[0]
         q_len = q.shape[1]
@@ -202,7 +206,10 @@ class T2SBlock:
 
 
         if torch_sdpa:
-            attn = F.scaled_dot_product_attention(q, k, v)
+            if token_idx:
+                attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)  # attn_mask??
+            else:
+                attn = F.scaled_dot_product_attention(q, k, v)
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
 
@@ -234,12 +241,13 @@ class T2STransformer:
     def process_prompt(
         self, x:torch.Tensor, attn_mask : torch.Tensor,
         padding_mask : Optional[torch.Tensor]=None, 
-        torch_sdpa:bool=True
+        torch_sdpa:bool=True,
+        token_idx:torch.Tensor=None,
         ):
         k_cache : List[torch.Tensor] = []
         v_cache : List[torch.Tensor] = []
         for i in range(self.num_blocks):
-            x, k_cache_, v_cache_ = self.blocks[i].process_prompt(x, attn_mask, padding_mask, torch_sdpa)
+            x, k_cache_, v_cache_ = self.blocks[i].process_prompt(x, attn_mask, padding_mask, torch_sdpa, token_idx)
             k_cache.append(k_cache_)
             v_cache.append(v_cache_)
         return x, k_cache, v_cache
@@ -249,10 +257,11 @@ class T2STransformer:
         k_cache: List[torch.Tensor], 
         v_cache: List[torch.Tensor], 
         attn_mask : Optional[torch.Tensor]=None,
-        torch_sdpa:bool=True
+        torch_sdpa:bool=True,
+        token_idx:torch.Tensor=None,
     ):
         for i in range(self.num_blocks):
-            x, k_cache[i], v_cache[i] = self.blocks[i].decode_next_token(x, k_cache[i], v_cache[i], attn_mask, torch_sdpa)
+            x, k_cache[i], v_cache[i] = self.blocks[i].decode_next_token(x, k_cache[i], v_cache[i], attn_mask, torch_sdpa, token_idx)
         return x, k_cache, v_cache
 
 
@@ -836,21 +845,40 @@ class Text2SemanticDecoder(nn.Module):
             (x_len, 0),
             value=False,
         )
-        xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)\
-                                                .unsqueeze(0)\
+        if x.device == 'hpu' or True:   # TODO REMOVE TRUE
+            concrete_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)
+            token_idx = torch.tensor(concrete_mask.shape[0]).to(x.device)
+            concrete_mask_padded = torch.ones(1500, 1500, dtype=torch.bool) # all true TODO remove 1500 with max length
+            concrete_mask_padded[:token_idx, :token_idx] = concrete_mask
+            # TODO 1500-> src_len => max len
+            xy_attn_mask = concrete_mask_padded.unsqueeze(0)\
                                                 .expand(bsz*self.num_head, -1, -1)\
-                                                .view(bsz, self.num_head, src_len, src_len)\
+                                                .view(bsz, self.num_head, 1500, 1500)\
                                                 .to(device=x.device, dtype=torch.bool)
-
+            xy_pos = F.pad(xy_pos, (0, 0, 0, 1500-xy_pos.shape[1]), value=0)  # pad xy_pos
+        else:
+            token_idx = None
+            xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)\
+                                                    .unsqueeze(0)\
+                                                    .expand(bsz*self.num_head, -1, -1)\
+                                                    .view(bsz, self.num_head, src_len, src_len)\
+                                                    .to(device=x.device, dtype=torch.bool)
         for idx in tqdm(range(1500)):
             if xy_attn_mask is not None:
-                xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None)
+                xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
             else:
-                xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+                if token_idx:
+                    token_idx += 1
+                    attn_mask = torch.ones(1, 1500, dtype=torch.bool).to(x.device)
+                    attn_mask[:, token_idx:] = False
+                    xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache, attn_mask=attn_mask, token_idx=token_idx,)
+                else:
+                    xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
 
-            logits = self.ar_predict_layer(
-                xy_dec[:, -1]
-            )
+            if token_idx and xy_attn_mask is not None:
+                logits = self.ar_predict_layer(xy_dec[:, token_idx-1])
+            else:
+                logits = self.ar_predict_layer(xy_dec[:, -1])
 
             if idx == 0:
                 xy_attn_mask = None
@@ -860,6 +888,8 @@ class Text2SemanticDecoder(nn.Module):
             samples = sample(
                 logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
             )[0]
+
+            print(samples)  # TODO remove print
 
             y = torch.concat([y, samples], dim=1)
 

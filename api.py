@@ -171,7 +171,27 @@ from tools.my_utils import load_audio
 import config as global_config
 import logging
 import subprocess
+import random
 
+# make result deterministic
+def set_seed(seed):
+    # Fix seed for torch
+    torch.manual_seed(seed)
+    # If using CUDA (for GPU)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # if using multiple GPUs
+    # Fix seed for Python's built-in random module
+    random.seed(seed)
+    # Fix seed for NumPy
+    np.random.seed(seed)
+    # Make PyTorch's CuDNN backend deterministic (reproducible) if using GPU
+    torch.backends.cudnn.deterministic = True
+    # Disable CuDNN's auto-tuning (optional for reproducibility, but slower)
+    torch.backends.cudnn.benchmark = False
+
+# Set seed to a fixed value (e.g., 42)
+set_seed(42)
 
 class DefaultRefer:
     def __init__(self, path, text, language):
@@ -622,6 +642,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
         all_phoneme_len = torch.tensor([all_phoneme_ids.shape[-1]]).to(device)
         t2 = ttime()
         with torch.no_grad():
+            t2s_model.model = t2s_model.model
             pred_semantic, idx = t2s_model.model.infer_panel(
                 all_phoneme_ids,
                 all_phoneme_len,
@@ -648,7 +669,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             audio_bytes = pack_audio(audio_bytes,(np.concatenate(audio_opt, 0) * 2147483647).astype(np.int32),hps.data.sampling_rate)
         else:
             audio_bytes = pack_audio(audio_bytes,(np.concatenate(audio_opt, 0) * 32768).astype(np.int16),hps.data.sampling_rate)
-    # logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
         if stream_mode == "normal":
             audio_bytes, audio_chunk = read_clean_buffer(audio_bytes)
             yield audio_chunk
@@ -755,7 +776,7 @@ parser.add_argument("-g", "--gpt_path", type=str, default=g_config.gpt_path, hel
 parser.add_argument("-dr", "--default_refer_path", type=str, default="", help="默认参考音频路径")
 parser.add_argument("-dt", "--default_refer_text", type=str, default="", help="默认参考音频文本")
 parser.add_argument("-dl", "--default_refer_language", type=str, default="", help="默认参考音频语种")
-parser.add_argument("-d", "--device", type=str, default=g_config.infer_device, help="cuda / cpu")
+parser.add_argument("-d", "--device", type=str, default=g_config.infer_device, help="cuda / cpu / hpu")
 parser.add_argument("-a", "--bind_addr", type=str, default="0.0.0.0", help="default: 0.0.0.0")
 parser.add_argument("-p", "--port", type=int, default=g_config.api_port, help="default: 9880")
 parser.add_argument("-fp", "--full_precision", action="store_true", default=False, help="覆盖config.is_half为False, 使用全精度")
@@ -774,6 +795,9 @@ args = parser.parse_args()
 sovits_path = args.sovits_path
 gpt_path = args.gpt_path
 device = args.device
+if device == "hpu":
+    import habana_frameworks.torch.core as htcore
+
 port = args.port
 host = args.bind_addr
 cnhubert_base_path = args.hubert_path
