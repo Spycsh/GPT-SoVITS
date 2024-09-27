@@ -193,6 +193,10 @@ def set_seed(seed):
 # Set seed to a fixed value (e.g., 42)
 set_seed(42)
 
+# resolve potential nltk averaged_perceptron_tagger_eng not found error
+import nltk
+nltk.download('averaged_perceptron_tagger_eng')
+
 class DefaultRefer:
     def __init__(self, path, text, language):
         self.path = args.default_refer_path
