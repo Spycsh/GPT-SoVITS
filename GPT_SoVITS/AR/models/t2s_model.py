@@ -207,7 +207,7 @@ class T2SBlock:
 
         if torch_sdpa:
             if token_idx:
-                attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)  # attn_mask??
+                attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
             else:
                 attn = F.scaled_dot_product_attention(q, k, v)
         else:
@@ -845,12 +845,12 @@ class Text2SemanticDecoder(nn.Module):
             (x_len, 0),
             value=False,
         )
-        if x.device == 'hpu' or True:   # TODO REMOVE TRUE
+        if x.device == 'hpu':
             concrete_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)
             token_idx = torch.tensor(concrete_mask.shape[0]).to(x.device)
             concrete_mask_padded = torch.ones(1500, 1500, dtype=torch.bool) # all true TODO remove 1500 with max length
             concrete_mask_padded[:token_idx, :token_idx] = concrete_mask
-            # TODO 1500-> src_len => max len
+            # change src len to 1500 as max_len
             xy_attn_mask = concrete_mask_padded.unsqueeze(0)\
                                                 .expand(bsz*self.num_head, -1, -1)\
                                                 .view(bsz, self.num_head, 1500, 1500)\
@@ -869,7 +869,7 @@ class Text2SemanticDecoder(nn.Module):
             else:
                 if token_idx:
                     token_idx += 1
-                    attn_mask = torch.ones(1, 1500, dtype=torch.bool).to(x.device)
+                    attn_mask = torch.ones(1, 1500, dtype=torch.bool).to(x.device)  ## outside the loop?
                     attn_mask[:, token_idx:] = False
                     xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache, attn_mask=attn_mask, token_idx=token_idx,)
                 else:
@@ -889,7 +889,7 @@ class Text2SemanticDecoder(nn.Module):
                 logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
             )[0]
 
-            print(samples)  # TODO remove print
+            # print(samples)  # TODO remove print
 
             y = torch.concat([y, samples], dim=1)
 
