@@ -36,7 +36,7 @@ default_config = {
     "EOS": 1024,
 }
 
-# @torch.jit.script ## 使用的话首次推理会非常慢，而且推理速度不稳定
+# #@torch.jit.script ## 使用的话首次推理会非常慢，而且推理速度不稳定
 # Efficient implementation equivalent to the following:
 def scaled_dot_product_attention(query:torch.Tensor, key:torch.Tensor, value:torch.Tensor, attn_mask:Optional[torch.Tensor]=None, scale:Optional[torch.Tensor]=None) -> torch.Tensor:
     B, H, L, S =query.size(0), query.size(1), query.size(-2), key.size(-2)
@@ -65,7 +65,7 @@ def scaled_dot_product_attention(query:torch.Tensor, key:torch.Tensor, value:tor
 
     return attn_weight @ value
 
-@torch.jit.script
+#@torch.jit.script
 class T2SMLP:
     def __init__(self, w1, b1, w2, b2):
         self.w1 = w1
@@ -79,7 +79,7 @@ class T2SMLP:
         return x
 
 
-@torch.jit.script
+##@torch.jit.script
 class T2SBlock:
     def __init__(
             self,
@@ -113,7 +113,7 @@ class T2SBlock:
 
         self.false = torch.tensor(False, dtype=torch.bool)
 
-    @torch.jit.ignore
+    #@torch.jit.ignore
     def to_mask(self, x:torch.Tensor, padding_mask:Optional[torch.Tensor]):
         if padding_mask is None:
             return x
@@ -140,6 +140,7 @@ class T2SBlock:
         v = v_cache.view(batch_size, kv_len, self.num_heads, -1).transpose(1, 2)
 
         if torch_sdpa:
+            print(q.shape)
             attn = F.scaled_dot_product_attention(q, k, v, ~attn_mask)
             attn = attn.nan_to_num(nan=0.0) # convert the nan to zeros explicitly
         else:
@@ -204,11 +205,13 @@ class T2SBlock:
         k = k_cache.view(batch_size, kv_len, self.num_heads, -1).transpose(1, 2)
         v = v_cache.view(batch_size, kv_len, self.num_heads, -1).transpose(1, 2)
 
-
+        #breakpoint()
         if torch_sdpa:
             if token_idx:
+                print(q.shape, k.shape, v.shape, attn_mask.shape)
                 attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
             else:
+                print(q.shape)
                 attn = F.scaled_dot_product_attention(q, k, v)
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
@@ -232,7 +235,7 @@ class T2SBlock:
         return x, k_cache, v_cache
 
 
-@torch.jit.script
+#@torch.jit.script
 class T2STransformer:
     def __init__(self, num_blocks : int, blocks: List[T2SBlock]):
         self.num_blocks : int = num_blocks
@@ -845,17 +848,18 @@ class Text2SemanticDecoder(nn.Module):
             (x_len, 0),
             value=False,
         )
-        if x.device == 'hpu':
+        hpu_max_len=1500
+        if x.device.type == 'hpu':
             concrete_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)
             token_idx = torch.tensor(concrete_mask.shape[0]).to(x.device)
-            concrete_mask_padded = torch.ones(1500, 1500, dtype=torch.bool) # all true TODO remove 1500 with max length
+            concrete_mask_padded = torch.ones(hpu_max_len,hpu_max_len, dtype=torch.bool) # all true TODO remove 1500 with max length
             concrete_mask_padded[:token_idx, :token_idx] = concrete_mask
             # change src len to 1500 as max_len
             xy_attn_mask = concrete_mask_padded.unsqueeze(0)\
                                                 .expand(bsz*self.num_head, -1, -1)\
-                                                .view(bsz, self.num_head, 1500, 1500)\
+                                                .view(bsz, self.num_head, hpu_max_len,hpu_max_len)\
                                                 .to(device=x.device, dtype=torch.bool)
-            xy_pos = F.pad(xy_pos, (0, 0, 0, 1500-xy_pos.shape[1]), value=0)  # pad xy_pos
+            xy_pos = F.pad(xy_pos, (0, 0, 0, hpu_max_len-xy_pos.shape[1]), value=0)  # pad xy_pos
         else:
             token_idx = None
             xy_attn_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)\
@@ -863,13 +867,15 @@ class Text2SemanticDecoder(nn.Module):
                                                     .expand(bsz*self.num_head, -1, -1)\
                                                     .view(bsz, self.num_head, src_len, src_len)\
                                                     .to(device=x.device, dtype=torch.bool)
+        self.t2s_transformer=wrap_in_hpu_graph(self.t2s_transformer, disable_tensor_cache=True)
+
         for idx in tqdm(range(1500)):
             if xy_attn_mask is not None:
                 xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
             else:
                 if token_idx:
                     token_idx += 1
-                    attn_mask = torch.ones(1, 1500, dtype=torch.bool).to(x.device)  ## outside the loop?
+                    attn_mask = torch.ones(1, hpu_max_len, dtype=torch.bool).to(x.device)  ## outside the loop?
                     attn_mask[:, token_idx:] = False
                     xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache, attn_mask=attn_mask, token_idx=token_idx,)
                 else:
