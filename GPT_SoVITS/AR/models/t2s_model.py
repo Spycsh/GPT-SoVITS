@@ -36,6 +36,18 @@ default_config = {
     "EOS": 1024,
 }
 
+import contextlib
+try:
+    from habana_frameworks.torch.hpex.kernels import FusedSDPA
+    from habana_frameworks.torch.hpu import sdp_kernel
+    SDPContext = True
+except ImportError:
+    print("Not using HPU fused scaled dot-product attention kernel.")
+    FusedSDPA = None
+    SDPContext = False
+
+
+
 # #@torch.jit.script ## 使用的话首次推理会非常慢，而且推理速度不稳定
 # Efficient implementation equivalent to the following:
 def scaled_dot_product_attention(query:torch.Tensor, key:torch.Tensor, value:torch.Tensor, attn_mask:Optional[torch.Tensor]=None, scale:Optional[torch.Tensor]=None) -> torch.Tensor:
@@ -140,11 +152,13 @@ class T2SBlock:
         v = v_cache.view(batch_size, kv_len, self.num_heads, -1).transpose(1, 2)
 
         if torch_sdpa:
-            print(q.shape)
+            print("Prefilling", q.shape)
             attn = F.scaled_dot_product_attention(q, k, v, ~attn_mask)
             attn = attn.nan_to_num(nan=0.0) # convert the nan to zeros explicitly
         else:
-            attn = scaled_dot_product_attention(q, k, v, attn_mask)
+            with sdp_kernel(enable_recompute=True) if SDPContext else contextlib.nullcontext():
+                #attn = scaled_dot_product_attention(q, k, v, attn_mask)
+                attn = FusedSDPA.apply(q, k, v, attn_mask.unsqueeze(0).unsqueeze(0), 0.0, False, None)
 
         attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
         attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
@@ -208,10 +222,11 @@ class T2SBlock:
         #breakpoint()
         if torch_sdpa:
             if token_idx:
-                print(q.shape, k.shape, v.shape, attn_mask.shape)
-                attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+                print("Decoding: ", q.shape, k.shape, v.shape, attn_mask.shape)
+                with sdp_kernel(enable_recompute=True) if SDPContext else contextlib.nullcontext():
+                    #attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+                    attn = FusedSDPA.apply(q, k, v, attn_mask.unsqueeze(0).unsqueeze(0), 0.0, False, None)
             else:
-                print(q.shape)
                 attn = F.scaled_dot_product_attention(q, k, v)
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
@@ -867,7 +882,6 @@ class Text2SemanticDecoder(nn.Module):
                                                     .expand(bsz*self.num_head, -1, -1)\
                                                     .view(bsz, self.num_head, src_len, src_len)\
                                                     .to(device=x.device, dtype=torch.bool)
-        self.t2s_transformer=wrap_in_hpu_graph(self.t2s_transformer, disable_tensor_cache=True)
 
         for idx in tqdm(range(1500)):
             if xy_attn_mask is not None:
