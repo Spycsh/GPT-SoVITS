@@ -935,6 +935,31 @@ async def tts_endpoint(
 ):
     return handle(refer_wav_path, prompt_text, prompt_language, text, text_language, cut_punc, top_k, top_p, temperature, speed, inp_refs)
 
+@app.post("/v1/audio/speech")
+async def audio_speech(request: Request):
+    # request
+    # https://platform.openai.com/docs/api-reference/audio/createSpeech
+    # Usage:
+    # curl localhost:9880/v1/audio/speech -XPOST -d '{"input":"Who are you?"}' -H 'Content-Type: application/json' --output speech.wav
+    logger.info("This OpenAI protocol compatible router only support input/voice/speed parameters."
+                "Please refer to https://platform.openai.com/docs/api-reference/audio/createSpeech")
+
+    json_post_raw = await request.json()
+    input = json_post_raw.get("input")
+    refer_wav_path = json_post_raw.get("voice")
+    speed = json_post_raw.get("speed", 1.0)
+
+    return handle(refer_wav_path=refer_wav_path,
+                  prompt_text=None,
+                  prompt_language=None,
+                  text=input,
+                  text_language="zh",
+                  cut_punc=None,
+                  top_k=15,
+                  top_p=1.0,
+                  temperature=1.0,
+                  speed=speed,
+                  inp_refs=[])
 
 if __name__ == "__main__":
     uvicorn.run(app, host=host, port=port, workers=1)
