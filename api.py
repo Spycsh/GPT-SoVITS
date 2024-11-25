@@ -171,6 +171,7 @@ from tools.my_utils import load_audio
 import config as global_config
 import logging
 import subprocess
+from starlette.middleware.cors import CORSMiddleware
 
 
 class DefaultRefer:
@@ -853,6 +854,10 @@ change_gpt_sovits_weights(gpt_path = gpt_path, sovits_path = sovits_path)
 # 接口部分
 # --------------------------------
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+)
 
 @app.post("/set_model")
 async def set_model(request: Request):
