@@ -649,7 +649,7 @@ def get_tts_wav(ref_wav_path, prompt_text, prompt_language, text, text_language,
             audio_bytes = pack_audio(audio_bytes,(np.concatenate(audio_opt, 0) * 2147483647).astype(np.int32),hps.data.sampling_rate)
         else:
             audio_bytes = pack_audio(audio_bytes,(np.concatenate(audio_opt, 0) * 32768).astype(np.int16),hps.data.sampling_rate)
-    # logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
         if stream_mode == "normal":
             audio_bytes, audio_chunk = read_clean_buffer(audio_bytes)
             yield audio_chunk
