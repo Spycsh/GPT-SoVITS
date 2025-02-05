@@ -227,6 +227,7 @@ class T2SBlock:
                     #attn = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
                     attn = FusedSDPA.apply(q, k, v, attn_mask.unsqueeze(0).unsqueeze(0), 0.0, False, None)
             else:
+                print("Decoding: ", q.shape, k.shape, v.shape,)
                 attn = F.scaled_dot_product_attention(q, k, v)
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
@@ -863,7 +864,7 @@ class Text2SemanticDecoder(nn.Module):
             (x_len, 0),
             value=False,
         )
-        hpu_max_len=1500
+        hpu_max_len=512
         if x.device.type == 'hpu':
             concrete_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)
             token_idx = torch.tensor(concrete_mask.shape[0]).to(x.device)
