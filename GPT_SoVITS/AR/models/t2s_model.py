@@ -895,13 +895,13 @@ class Text2SemanticDecoder(nn.Module):
 
         prev_token_len = prompts.shape[1]
         if is_on_hpu:
-            y = F.pad(y, (0, 0, 0, hpu_max_len-prev_token_len), value=0)
+            y = F.pad(y, (0, hpu_max_len-prev_token_len), value=0)
 
         ######## >>>> indepenedent prefill start
         xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
         logits = self.ar_predict_layer(xy_dec[:, -1])
         samples = sample(
-            logits, y[:prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
+            logits, y[:, :prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
         )[0]
         # y = torch.concat([y, samples], dim=1)
         y[:, prev_token_len] = samples[:, -1]
@@ -931,7 +931,7 @@ class Text2SemanticDecoder(nn.Module):
             # if(idx<11):###至少预测出10个token不然不给停止（0.4s）
             #     logits = logits[:, :-1]
 
-            samples = sample(logits, y[:prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature)[0]
+            samples = sample(logits, y[:, :prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature)[0]
             # y = torch.concat([y, samples], dim=1)
             # next token
             prev_token_len += 1
