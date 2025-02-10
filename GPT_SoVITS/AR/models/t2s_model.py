@@ -893,15 +893,20 @@ class Text2SemanticDecoder(nn.Module):
             attn_mask = torch.zeros(1, hpu_max_len, dtype=torch.bool).to(x.device)
             attn_mask[:, :token_idx] = True
 
-        ######## >>>> indepenedent prefill start
+        prev_token_len = prompts.shape[1]
+        if is_on_hpu:
+            y = F.pad(y, (0, 0, 0, hpu_max_len-prev_token_len), value=0)
 
+        ######## >>>> indepenedent prefill start
+        xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
         logits = self.ar_predict_layer(xy_dec[:, -1])
         samples = sample(
-            logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
+            logits, y[:prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
         )[0]
-        y = torch.concat([y, samples], dim=1)
+        # y = torch.concat([y, samples], dim=1)
+        y[:, prev_token_len] = samples[:, -1]
         ####################### update next step ###################################
-        y_emb = self.ar_audio_embedding(y[:, -1:])
+        y_emb = self.ar_audio_embedding(y[:, prev_token_len:prev_token_len+1])  # input shape (1,1)
         xy_pos = y_emb * self.ar_audio_position.x_scale + self.ar_audio_position.alpha * self.ar_audio_position.pe[:, y_len + 0].to(dtype=y_emb.dtype,device=y_emb.device)
         ######### <<<< indepenedent prefill end
 
@@ -926,11 +931,11 @@ class Text2SemanticDecoder(nn.Module):
             # if(idx<11):###至少预测出10个token不然不给停止（0.4s）
             #     logits = logits[:, :-1]
 
-            samples = sample(
-                logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
-            )[0]
-
-            y = torch.concat([y, samples], dim=1)
+            samples = sample(logits, y[:prev_token_len], top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature)[0]
+            # y = torch.concat([y, samples], dim=1)
+            # next token
+            prev_token_len += 1
+            y[:, prev_token_len] = samples[:, -1]
 
             if early_stop_num != -1 and (y.shape[1] - prefix_len) > early_stop_num:
                 print("use early stop num:", early_stop_num)
@@ -946,7 +951,7 @@ class Text2SemanticDecoder(nn.Module):
                 break
 
             ####################### update next step ###################################
-            y_emb = self.ar_audio_embedding(y[:, -1:])
+            y_emb = self.ar_audio_embedding(y[:, prev_token_len:prev_token_len+1])  # input shape (1,1)
             xy_pos = y_emb * self.ar_audio_position.x_scale + self.ar_audio_position.alpha * self.ar_audio_position.pe[:, y_len + idx].to(dtype=y_emb.dtype,device=y_emb.device)
 
         if ref_free:
