@@ -160,8 +160,9 @@ class T2SBlock:
                 #attn = scaled_dot_product_attention(q, k, v, attn_mask)
                 attn = FusedSDPA.apply(q, k, v, attn_mask.unsqueeze(0).unsqueeze(0), 0.0, False, None)
 
-        attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
-        attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        # attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
+        # attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        attn = attn.transpose(1, 2).reshape(batch_size, q_len, -1)
         attn = F.linear(self.to_mask(attn, padding_mask), self.out_w, self.out_b)
 
         if padding_mask is not None:
@@ -232,8 +233,9 @@ class T2SBlock:
         else:
             attn = scaled_dot_product_attention(q, k, v, attn_mask)
 
-        attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
-        attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        # attn = attn.permute(2, 0, 1, 3).reshape(batch_size*q_len, self.hidden_dim)
+        # attn = attn.view(q_len, batch_size, self.hidden_dim).transpose(1, 0)
+        attn = attn.transpose(1, 2).reshape(batch_size, q_len, -1)
         attn = F.linear(attn, self.out_w, self.out_b)
 
         x = x + attn
@@ -865,7 +867,9 @@ class Text2SemanticDecoder(nn.Module):
             value=False,
         )
         hpu_max_len=512
-        if x.device.type == 'hpu':
+        is_on_hpu = True if x.device.type == 'hpu' else False
+
+        if is_on_hpu:
             concrete_mask = torch.concat([x_attn_mask_pad, y_attn_mask], dim=0)
             token_idx = torch.tensor(concrete_mask.shape[0]).to(x.device)
             concrete_mask_padded = torch.ones(hpu_max_len,hpu_max_len, dtype=torch.bool) # all true TODO remove 1500 with max length
@@ -884,33 +888,47 @@ class Text2SemanticDecoder(nn.Module):
                                                     .view(bsz, self.num_head, src_len, src_len)\
                                                     .to(device=x.device, dtype=torch.bool)
 
-        for idx in tqdm(range(1500)):
-            if xy_attn_mask is not None:
-                xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
-            else:
-                if token_idx:
-                    token_idx += 1
-                    attn_mask = torch.ones(1, hpu_max_len, dtype=torch.bool).to(x.device)  ## outside the loop?
-                    attn_mask[:, token_idx:] = False
-                    xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache, attn_mask=attn_mask, token_idx=token_idx,)
-                else:
-                    xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+        # prepare the attn_mask
+        if is_on_hpu:
+            attn_mask = torch.zeros(1, hpu_max_len, dtype=torch.bool).to(x.device)
+            attn_mask[:, :token_idx] = True
 
-            if token_idx and xy_attn_mask is not None:
-                logits = self.ar_predict_layer(xy_dec[:, token_idx-1])
-            else:
-                logits = self.ar_predict_layer(xy_dec[:, -1])
+        ######## >>>> indepenedent prefill start
 
-            if idx == 0:
-                xy_attn_mask = None
-            if(idx<11):###至少预测出10个token不然不给停止（0.4s）
-                logits = logits[:, :-1]
+        logits = self.ar_predict_layer(xy_dec[:, -1])
+        samples = sample(
+            logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
+        )[0]
+        y = torch.concat([y, samples], dim=1)
+        ####################### update next step ###################################
+        y_emb = self.ar_audio_embedding(y[:, -1:])
+        xy_pos = y_emb * self.ar_audio_position.x_scale + self.ar_audio_position.alpha * self.ar_audio_position.pe[:, y_len + 0].to(dtype=y_emb.dtype,device=y_emb.device)
+        ######### <<<< indepenedent prefill end
+
+        for idx in tqdm(range(1, 1500)):
+            # if xy_attn_mask is not None:
+            #     xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None, token_idx=token_idx)
+            # else:
+            if is_on_hpu:
+                token_idx += 1
+                # attn_mask = torch.zeros(1, hpu_max_len, dtype=torch.bool).to(x.device)
+                # attn_mask[:, token_idx:] = False
+                attn_mask[:, token_idx] = True
+                xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache, attn_mask=attn_mask, token_idx=token_idx,)
+            else:
+                xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+
+            logits = self.ar_predict_layer(xy_dec[:, -1])
+
+            # if idx == 0:
+            #     xy_attn_mask = None
+            ### FIXME?? Whether this line affects the data-dependent dynamic flow?
+            # if(idx<11):###至少预测出10个token不然不给停止（0.4s）
+            #     logits = logits[:, :-1]
 
             samples = sample(
                 logits, y, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty, temperature=temperature
             )[0]
-
-            # print(samples)  # TODO remove print
 
             y = torch.concat([y, samples], dim=1)
 

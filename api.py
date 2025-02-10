@@ -284,15 +284,15 @@ def get_gpt_weights(gpt_path):
         t2s_model = t2s_model.half()
     t2s_model = t2s_model.to(device)
     if device == "hpu":
-        pass
-        #from habana_frameworks.torch.hpu import wrap_in_hpu_graph
+        # pass
+        from habana_frameworks.torch.hpu import wrap_in_hpu_graph
         #breakpoint()
-        # <10% perf gain, useless
-        #t2s_model.model = wrap_in_hpu_graph(t2s_model.model, disable_tensor_cache=True)
+        # FIXME <10% perf gain, useless
+        t2s_model.model = wrap_in_hpu_graph(t2s_model.model, disable_tensor_cache=True)
         #should not wrap t2s_model but should wrap t2s_model.model
         #t2s_model = wrap_in_hpu_graph(t2s_model, disable_tensor_cache=True)
  
-        #print("Use hpu graph!!!")
+        print("Use hpu graph!!!")
     t2s_model.eval()
     total = sum([param.nelement() for param in t2s_model.parameters()])
     logger.info("Number of parameter: %.2fM" % (total / 1e6))
