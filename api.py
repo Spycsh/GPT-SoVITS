@@ -216,7 +216,7 @@ class Sovits:
         self.hps = hps
 
 def get_sovits_weights(sovits_path):
-    dict_s2 = torch.load(sovits_path, map_location="cpu")
+    dict_s2 = torch.load(sovits_path, map_location="cpu", weights_only=False)
     hps = dict_s2["config"]
     hps = DictToAttrRecursive(hps)
     hps.model.semantic_frame_rate = "25hz"
