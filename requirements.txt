@@ -17,17 +17,18 @@ g2p_en
 torchaudio
 modelscope==1.10.0
 sentencepiece
-transformers
+transformers>=4.43
+peft
 chardet
 PyYAML
 psutil
 jieba_fast
 jieba
-LangSegment>=0.2.0
-Faster_Whisper
+split-lang
+fast_langdetect>=0.3.0
 wordsegment
 rotary_embedding_torch
-pyjyutping 
+ToJyutping 
 g2pk2
 ko_pron
 opencc; sys_platform != 'linux'
@@ -36,3 +37,11 @@ python_mecab_ko; sys_platform != 'win32'
 fastapi
 uvicorn
 matplotlib
+x_transformers
+torchmetrics<=1.5
+pydantic<=2.10.6
+ctranslate2>=4.0,<5
+huggingface_hub>=0.13
+tokenizers>=0.13,<1
+av>=11
+tqdm
