@@ -1123,17 +1123,21 @@ async def audio_speech(request: Request):
     refer_wav_path = json_post_raw.get("voice")
     speed = json_post_raw.get("speed", 1.0)
 
-    return handle(refer_wav_path=refer_wav_path,
-                  prompt_text=None,
-                  prompt_language=None,
-                  text=input,
-                  text_language="zh",
-                  cut_punc=None,
-                  top_k=15,
-                  top_p=1.0,
-                  temperature=1.0,
-                  speed=speed,
-                  inp_refs=[])
+    return handle(
+        refer_wav_path=refer_wav_path,
+        prompt_text=None,
+        prompt_language=None,
+        text=input,
+        text_language="zh",
+        cut_punc=None,
+        top_k=15,
+        top_p=1.0,
+        temperature=1.0,
+        speed=speed,
+        inp_refs=[],
+        sample_steps=32,
+        if_sr=False,
+    )
 
 if __name__ == "__main__":
     uvicorn.run(app, host=host, port=port, workers=1)
