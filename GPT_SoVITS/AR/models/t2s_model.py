@@ -18,6 +18,7 @@ from AR.models.utils import (
     sample,
     topk_sampling,
 )
+from AR.models.hpu_graph_runner import DecodingHPUGraphRunner
 from AR.modules.embedding import SinePositionalEmbedding, TokenEmbedding
 from AR.modules.transformer import LayerNorm, TransformerEncoder, TransformerEncoderLayer
 
@@ -874,12 +875,16 @@ class Text2SemanticDecoder(nn.Module):
             .view(bsz, self.num_head, src_len, src_len)
             .to(device=x.device, dtype=torch.bool)
         )
+        decoder = DecodingHPUGraphRunner(self, xy_pos.shape[0])
+        decoder.capture()
 
         for idx in tqdm(range(1500)):
             if xy_attn_mask is not None:
                 xy_dec, k_cache, v_cache = self.t2s_transformer.process_prompt(xy_pos, xy_attn_mask, None)
+                decoder.assign_kvcache(k_cache, v_cache)
             else:
-                xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+                # xy_dec, k_cache, v_cache = self.t2s_transformer.decode_next_token(xy_pos, k_cache, v_cache)
+                xy_dec = decoder(xy_pos)
 
             logits = self.ar_predict_layer(xy_dec[:, -1])
 
