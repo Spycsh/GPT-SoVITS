@@ -893,7 +893,7 @@ def get_tts_wav(
             audio_bytes = pack_audio(audio_bytes, (audio_opt * 2147483647).astype(np.int32), sr)
         else:
             audio_bytes = pack_audio(audio_bytes, (audio_opt * 32768).astype(np.int16), sr)
-        # logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+        logger.info("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t3 - t2, t4 - t3))
         if stream_mode == "normal":
             audio_bytes, audio_chunk = read_clean_buffer(audio_bytes)
             yield audio_chunk
@@ -1036,7 +1036,7 @@ parser.add_argument("-g", "--gpt_path", type=str, default=g_config.gpt_path, hel
 parser.add_argument("-dr", "--default_refer_path", type=str, default="", help="默认参考音频路径")
 parser.add_argument("-dt", "--default_refer_text", type=str, default="", help="默认参考音频文本")
 parser.add_argument("-dl", "--default_refer_language", type=str, default="", help="默认参考音频语种")
-parser.add_argument("-d", "--device", type=str, default=g_config.infer_device, help="cuda / cpu")
+parser.add_argument("-d", "--device", type=str, default=g_config.infer_device, help="cuda / cpu / hpu")
 parser.add_argument("-a", "--bind_addr", type=str, default="0.0.0.0", help="default: 0.0.0.0")
 parser.add_argument("-p", "--port", type=int, default=g_config.api_port, help="default: 9880")
 parser.add_argument(
@@ -1060,6 +1060,9 @@ sovits_path = args.sovits_path
 gpt_path = args.gpt_path
 device = args.device
 port = args.port
+if device == "hpu":
+    import habana_frameworks.torch.core as htcore
+
 host = args.bind_addr
 cnhubert_base_path = args.hubert_path
 bert_path = args.bert_path
